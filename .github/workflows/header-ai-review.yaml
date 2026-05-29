@@ -1,0 +1,94 @@
+name: AI Review: Header Component
+
+on:
+  pull_request:
+    paths:
+      - 'header/**'
+    types: [opened, synchronize, reopened]
+
+# Обязательные разрешения для работы с Models и комментариями в PR
+permissions:
+  contents: read
+  pull-requests: write
+  models: read
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false # Не запускаем для черновиков
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Важно для корректного git diff
+
+      - name: Detect changed header files
+        id: changes
+        run: |
+          # Получаем список изменённых файлов в папке header/
+          FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '^header/' || true)
+          if [ -z "$FILES" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run AI Code Review
+        if: steps.changes.outputs.has_changes == 'true'
+        id: review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES="${{ steps.changes.outputs.files }}"
+          
+          # Формируем контент для ИИ
+          CONTENT="Проверь изменения в файлах шапки универсального редактора:\n\n"
+          while IFS= read -r FILE; do
+            if [ -f "$FILE" ]; then
+              EXT="${FILE##*.}"
+              CODE=$(cat "$FILE")
+              CONTENT+="### 📄 $FILE\n\`\`\`$EXT\n$CODE\n\`\`\`\n\n"
+            fi
+          done <<< "$FILES"
+
+          # Запрос к GitHub Models
+          RESPONSE=$(curl -s -X POST https://models.github.ai/inference/chat/completions \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"qwen/qwen-coder-plus\",
+              \"messages\": [
+                {
+                  \"role\": \"system\",
+                  \"content\": \"Ты старший PHP/JS-разработчик и эксперт по UI-архитектуре. Анализируй код шапки редактора. Оцени: 1) Безопасность (XSS, валидация, экранирование) 2) Стиль и читаемость 3) Липкость шапки (position: sticky, top: 0, z-index, отсутствие overflow: hidden у родителей) 4) Модульность (отделение логики/стилей, возможность переиспользования) 5) Доступность (ARIA, семантика). Отвечай СТРОГО на русском, кратко, по пунктам. Если код отличный - напиши '✅ Всё отлично, изменений не требуется'.\"
+                },
+                {
+                  \"role\": \"user\",
+                  \"content\": \"$CONTENT\"
+                }
+              ],
+              \"temperature\": 0.2
+            }")
+
+          # Безопасный парсинг ответа
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "⚠️ Не удалось получить ответ ИИ"')
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post review comment to PR
+        if: steps.review.outputs.review != '' && steps.review.outputs.review != '⚠️ Не удалось получить ответ ИИ'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const review = `${{ steps.review.outputs.review }}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `🤖 **AI Review: Header Component**\n\n${review}\n\n---\n📦 _Powered by GitHub Models (Qwen Coder)_`
+            });
