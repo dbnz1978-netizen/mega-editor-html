@@ -6,27 +6,24 @@ on:
       - 'header/**'
     types: [opened, synchronize, reopened]
 
-# Обязательные разрешения для работы с Models и комментариями в PR
 permissions:
   contents: read
   pull-requests: write
-  models: read
 
 jobs:
   ai-review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false # Не запускаем для черновиков
+    if: github.event.pull_request.draft == false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Важно для корректного git diff
+          fetch-depth: 0
 
       - name: Detect changed header files
         id: changes
         run: |
-          # Получаем список изменённых файлов в папке header/
           FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '^header/' || true)
           if [ -z "$FILES" ]; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
@@ -45,43 +42,58 @@ jobs:
         run: |
           FILES="${{ steps.changes.outputs.files }}"
           
-          # Формируем контент для ИИ
-          CONTENT="Проверь изменения в файлах шапки универсального редактора:\n\n"
+          # Установка jq если нужно
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+          
+          # Формируем контент
+          CONTENT="Проверь изменения в файлах Header компонента:"
           while IFS= read -r FILE; do
             if [ -f "$FILE" ]; then
               EXT="${FILE##*.}"
-              CODE=$(cat "$FILE")
-              CONTENT+="### 📄 $FILE\n\`\`\`$EXT\n$CODE\n\`\`\`\n\n"
+              CONTENT="$CONTENT"$'\n'"### 📄 $FILE"$'\n'"\`\`\`$EXT"$'\n'"$(cat "$FILE")"$'\n'"\`\`\`"
             fi
           done <<< "$FILES"
 
-          # Запрос к GitHub Models
-          RESPONSE=$(curl -s -X POST https://models.github.ai/inference/chat/completions \
+          # API запрос к GitHub Models
+          RESPONSE=$(curl -s -X POST https://api.github.com/models/endpoints/github-gpt-4-turbo/chat/completions \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"qwen/qwen-coder-plus\",
-              \"messages\": [
-                {
-                  \"role\": \"system\",
-                  \"content\": \"Ты старший PHP/JS-разработчик и эксперт по UI-архитектуре. Анализируй код шапки редактора. Оцени: 1) Безопасность (XSS, валидация, экранирование) 2) Стиль и читаемость 3) Липкость шапки (position: sticky, top: 0, z-index, отсутствие overflow: hidden у родителей) 4) Модульность (отделение логики/стилей, возможность переиспользования) 5) Доступность (ARIA, семантика). Отвечай СТРОГО на русском, кратко, по пунктам. Если код отличный - напиши '✅ Всё отлично, изменений не требуется'.\"
-                },
-                {
-                  \"role\": \"user\",
-                  \"content\": \"$CONTENT\"
-                }
-              ],
-              \"temperature\": 0.2
-            }")
-
-          # Безопасный парсинг ответа
-          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "⚠️ Не удалось получить ответ ИИ"')
-          echo "review<<EOF" >> $GITHUB_OUTPUT
-          echo "$REVIEW" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            --data-binary @- << 'PAYLOAD'
+          {
+            "model": "gpt-4-turbo",
+            "messages": [
+              {
+                "role": "system",
+                "content": "Ты опытный разработчик и эксперт по фронтенд-архитектуре. Анализируй код Header компонента. Проверь качество кода, семантику HTML, доступность (a11y), производительность, безопасность. Предложи конкретные улучшения. Будь конструктивен."
+              },
+              {
+                "role": "user",
+                "content": "$CONTENT"
+              }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 1000
+          }
+          PAYLOAD
+          )
+          
+          # Парсим ответ
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+          
+          if [ -z "$REVIEW" ]; then
+            REVIEW="⚠️ Ошибка при получении ответа ИИ"
+          fi
+          
+          {
+            echo "review<<EOF"
+            echo "$REVIEW"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Post review comment to PR
-        if: steps.review.outputs.review != '' && steps.review.outputs.review != '⚠️ Не удалось получить ответ ИИ'
+        if: steps.review.outputs.review != '' && steps.review.outputs.review != '⚠️ Ошибка при получении ответа ИИ'
         uses: actions/github-script@v7
         with:
           script: |
@@ -90,5 +102,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `🤖 **AI Review: Header Component**\n\n${review}\n\n---\n📦 _Powered by GitHub Models (Qwen Coder)_`
+              body: `🤖 **AI Review: Header Component**\n\n${review}\n\n---\n📦 _Powered by GitHub Models_`
             });
