@@ -335,7 +335,7 @@
         }
     </style>
 </head>
-<body data-project-id="mega-editor-html">
+<body>
     <div class="demo-shell">
         <section class="chat-demo">
             <header class="chat-demo__header">
@@ -385,6 +385,8 @@
                 || document.body.dataset.projectId
                 || 'default';
             const LS_KEY = 'memory_phrases_' + projectId;
+            const MAX_PHRASES = 30;
+            const MAX_PHRASE_LENGTH = 500;
 
             const html = document.documentElement;
             const inputEl = document.getElementById('chatInput');
@@ -397,7 +399,13 @@
             function loadPhrases() {
                 try {
                     const parsed = JSON.parse(localStorage.getItem(LS_KEY));
-                    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+                    return Array.isArray(parsed)
+                        ? parsed.filter((item) => {
+                            return typeof item === 'string'
+                                && item.trim()
+                                && item.trim().length <= MAX_PHRASE_LENGTH;
+                        }).slice(0, MAX_PHRASES)
+                        : [];
                 } catch (error) {
                     return [];
                 }
@@ -452,14 +460,14 @@
 
             function addPhrase(text) {
                 const trimmed = text.trim();
-                if (!trimmed) {
+                if (!trimmed || trimmed.length > MAX_PHRASE_LENGTH) {
                     return;
                 }
 
                 const phrases = loadPhrases();
                 const normalized = normalizePhrase(trimmed);
 
-                if (phrases.some((phrase) => normalizePhrase(phrase) === normalized)) {
+                if (phrases.length >= MAX_PHRASES || phrases.some((phrase) => normalizePhrase(phrase) === normalized)) {
                     return;
                 }
 
