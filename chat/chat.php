@@ -467,7 +467,11 @@
                 const phrases = loadPhrases();
                 const normalized = normalizePhrase(trimmed);
 
-                if (phrases.length >= MAX_PHRASES || phrases.some((phrase) => normalizePhrase(phrase) === normalized)) {
+                if (phrases.length >= MAX_PHRASES) {
+                    return;
+                }
+
+                if (phrases.some((phrase) => normalizePhrase(phrase) === normalized)) {
                     return;
                 }
 

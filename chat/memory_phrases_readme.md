@@ -1,6 +1,6 @@
 # Память фраз
 
-`/home/runner/work/mega-editor-html/mega-editor-html/chat/chat.php` содержит демонстрационный чат-компонент с кнопкой **«Добавить в память»** над полем `class="input-row"`.
+`chat/chat.php` содержит демонстрационный чат-компонент с кнопкой **«Добавить в память»** над полем `class="input-row"`.
 
 - фразы сохраняются в `localStorage`;
 - ключ хранения: `memory_phrases_<projectId>`;
